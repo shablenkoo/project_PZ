@@ -1,74 +1,121 @@
-from fastapi import FastAPI, Depends
-from sqlalchemy import func
-import datetime
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-import models, database, services
+import os
 import time
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
+import models, database, services, auth
+from auth import get_current_user
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Дозволяє запити з будь-якого домену
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Створюємо базу даних при запуску
 models.Base.metadata.create_all(bind=database.engine)
-@app.get("/")
-def home():
-    return {"status": "Backend is running", "test_version": "v5_with_dates"}
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
 
-@app.post("/sync")
-def sync_transactions(token: str, account_id: str, db: Session = Depends(database.get_db)):
-    # За останні 30 днів
-    start_time = int(time.time()) - (30 * 24 * 60 * 60)
-    data = services.fetch_mono_data(token, account_id, start_time)
+class SettingsUpdate(BaseModel):
+    mono_token: str
+    mono_account_id: str
 
-    new_count = 0
-    for item in data:
-        existing = db.query(models.Transaction).filter(models.Transaction.mono_id == item['id']).first()
-        if not existing:
-            # Створюємо новий запис з ПРАВИЛЬНИМИ даними
-            new_tx = models.Transaction(
-                mono_id=item['id'],
-                amount=item['amount'] / 100,
-                description=item['description'],
-                mcc=item['mcc'],
-                category=services.get_category_name(item['mcc']),
-                time=datetime.datetime.fromtimestamp(item['time'])  # ОСЬ ТУТ МАГІЯ ДАТИ
-            )
-            db.add(new_tx)
-            new_count += 1
+class TransactionUpdate(BaseModel):
+    category: str
 
-    db.commit()  # Зберігаємо в базу
-    return {"message": "Успішно", "added": new_count}
+class BudgetCreate(BaseModel):
+    category: str
+    limit_amount: float
 
+@app.post("/register")
+def register(user_data: UserCreate, db: Session = Depends(database.get_db)):
+    db_user = db.query(models.User).filter(models.User.username == user_data.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Логін зайнятий")
+    new_user = models.User(username=user_data.username, hashed_password=auth.get_password_hash(user_data.password))
+    db.add(new_user)
+    db.commit()
+    return {"message": "Успіх"}
+
+@app.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Невірний пароль")
+    access_token = auth.create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/transactions")
-def get_transactions(db: Session = Depends(database.get_db)):
-    # Сортуємо за часом (desc - від нових до старих)
-    return db.query(models.Transaction).order_by(models.Transaction.time.desc()).all()
+def get_transactions(days: int = 30, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    start_date = datetime.now() - timedelta(days=days)
+    return db.query(models.Transaction).filter(
+        models.Transaction.user_id == current_user.id,
+        models.Transaction.time >= start_date
+    ).order_by(models.Transaction.time.desc()).all()
 
+@app.put("/transactions/{tx_id}")
+def update_transaction(tx_id: int, data: TransactionUpdate, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id, models.Transaction.user_id == current_user.id).first()
+    if not tx: raise HTTPException(status_code=404)
+    tx.category = data.category
+    db.commit()
+    return {"message": "Оновлено"}
 
 @app.get("/stats")
-def get_stats(db: Session = Depends(database.get_db)):
-    # Групуємо витрати (сума < 0) за категоріями
-    stats = db.query(
-        models.Transaction.category,
-        func.abs(func.sum(models.Transaction.amount)).label("total")
-    ).filter(models.Transaction.amount < 0).group_by(models.Transaction.category).all()
+def get_stats(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    expenses = db.query(models.Transaction.category, func.abs(func.sum(models.Transaction.amount))).filter(
+        models.Transaction.user_id == current_user.id, models.Transaction.amount < 0
+    ).group_by(models.Transaction.category).all()
+    income = db.query(func.sum(models.Transaction.amount)).filter(
+        models.Transaction.user_id == current_user.id, models.Transaction.amount > 0
+    ).scalar() or 0
+    return {
+        "categories": [{"name": s[0], "value": round(s[1], 2)} for s in expenses],
+        "total_income": round(income, 2),
+        "total_expenses": round(sum(s[1] for s in expenses), 2)
+    }
 
-    # Перетворюємо в зручний формат для фронтенду
-    return [{"name": s[0], "value": round(s[1], 2)} for s in stats]
+@app.post("/budgets")
+def set_budget(data: BudgetCreate, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    existing = db.query(models.Budget).filter(models.Budget.user_id == current_user.id, models.Budget.category == data.category).first()
+    if existing: existing.limit_amount = data.limit_amount
+    else:
+        db.add(models.Budget(category=data.category, limit_amount=data.limit_amount, user_id=current_user.id))
+    db.commit()
+    return {"message": "Збережено"}
 
-@app.get("/get-accounts")
-def get_accounts(token: str):
-    import requests
-    headers = {"X-Token": token}
-    response = requests.get("https://api.monobank.ua/personal/client-info", headers=headers)
-    return response.json()
+@app.get("/budgets")
+def get_budgets(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    return db.query(models.Budget).filter(models.Budget.user_id == current_user.id).all()
+
+@app.post("/settings")
+def update_settings(data: SettingsUpdate, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    current_user.mono_token = data.mono_token
+    current_user.mono_account_id = data.mono_account_id
+    db.commit()
+    return {"message": "Збережено"}
+
+@app.post("/sync")
+def sync_transactions(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    if not current_user.mono_token: raise HTTPException(status_code=400, detail="Налаштуйте токен")
+    start_time = int(time.time()) - (30 * 24 * 60 * 60)
+    data = services.fetch_mono_data(current_user.mono_token, current_user.mono_account_id, start_time)
+    for item in data:
+        if not db.query(models.Transaction).filter(models.Transaction.mono_id == item['id']).first():
+            db.add(models.Transaction(
+                mono_id=item['id'], amount=item['amount']/100, description=item['description'],
+                mcc=item['mcc'], category=services.get_category_name(item['mcc']),
+                time=datetime.fromtimestamp(item['time']), user_id=current_user.id
+            ))
+    db.commit()
+    return {"status": "ok"}
