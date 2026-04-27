@@ -7,7 +7,6 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    # Нові поля для персональних налаштувань
     mono_token = Column(String, nullable=True)
     mono_account_id = Column(String, nullable=True)
 
@@ -24,7 +23,6 @@ class Transaction(Base):
     category = Column(String)
     time = Column(DateTime)
 
-    # Нове поле: чия це транзакція?
     user_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", back_populates="transactions")
 

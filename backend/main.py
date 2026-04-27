@@ -9,6 +9,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import models, database, services, auth
 from auth import get_current_user
+import requests
 
 app = FastAPI()
 
@@ -37,6 +38,33 @@ class BudgetCreate(BaseModel):
     category: str
     limit_amount: float
 
+
+@app.get("/monobank/accounts")
+def get_mono_accounts(token: str):
+    headers = {"X-Token": token}
+    url = "https://api.monobank.ua/personal/client-info"
+
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+
+        print(f"DEBUG: Status: {res.status_code}")
+
+        if res.status_code == 429:
+            raise HTTPException(status_code=400, detail="Занадто часто! Почекайте 60 секунд.")
+        if res.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Помилка токена (код {res.status_code})")
+
+        data = res.json()
+        accounts = []
+        for acc in data['accounts']:
+            currency = "UAH" if acc['currencyCode'] == 980 else ("USD" if acc['currencyCode'] == 840 else "EUR")
+            balance = acc['balance'] / 100
+            name = f"{acc.get('type', 'Картка')} ({balance} {currency})"
+            accounts.append({"id": acc['id'], "name": name})
+
+        return accounts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Помилка з'єднання: {str(e)}")
 @app.post("/register")
 def register(user_data: UserCreate, db: Session = Depends(database.get_db)):
     db_user = db.query(models.User).filter(models.User.username == user_data.username).first()
@@ -46,6 +74,24 @@ def register(user_data: UserCreate, db: Session = Depends(database.get_db)):
     db.add(new_user)
     db.commit()
     return {"message": "Успіх"}
+
+@app.delete("/budgets/{budget_id}")
+def delete_budget(budget_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    budget = db.query(models.Budget).filter(models.Budget.id == budget_id, models.Budget.user_id == current_user.id).first()
+    if not budget:
+        raise HTTPException(status_code=404, detail="Limit not found")
+    db.delete(budget)
+    db.commit()
+    return {"ok": True}
+
+@app.put("/budgets/{budget_id}")
+def update_budget(budget_id: int, budget_data: dict, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    budget = db.query(models.Budget).filter(models.Budget.id == budget_id, models.Budget.user_id == current_user.id).first()
+    if not budget:
+        raise HTTPException(status_code=404, detail="Limit not found")
+    budget.limit_amount = budget_data.get('limit_amount')
+    db.commit()
+    return budget
 
 @app.post("/token")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -72,13 +118,21 @@ def update_transaction(tx_id: int, data: TransactionUpdate, db: Session = Depend
     return {"message": "Оновлено"}
 
 @app.get("/stats")
-def get_stats(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+def get_stats(days: int = 30, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    start_date = datetime.now() - timedelta(days=days)
+
     expenses = db.query(models.Transaction.category, func.abs(func.sum(models.Transaction.amount))).filter(
-        models.Transaction.user_id == current_user.id, models.Transaction.amount < 0
+        models.Transaction.user_id == current_user.id,
+        models.Transaction.amount < 0,
+        models.Transaction.time >= start_date
     ).group_by(models.Transaction.category).all()
+
     income = db.query(func.sum(models.Transaction.amount)).filter(
-        models.Transaction.user_id == current_user.id, models.Transaction.amount > 0
+        models.Transaction.user_id == current_user.id,
+        models.Transaction.amount > 0,
+        models.Transaction.time >= start_date
     ).scalar() or 0
+
     return {
         "categories": [{"name": s[0], "value": round(s[1], 2)} for s in expenses],
         "total_income": round(income, 2),

@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+const COLORS = [
+  '#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8',
+  '#82ca9d', '#FF6666', '#A020F0', '#FFA500', '#00CED1',
+  '#F08080', '#DDA0DD', '#98FB98', '#FFD700', '#40E0D0',
+  '#FF7F50', '#00FA9A', '#BA55D3', '#7B68EE', '#FF1493'
+];
 const API_URL = "http://127.0.0.1:8000";
 
 function App() {
@@ -12,36 +17,51 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [showSettings, setShowSettings] = useState(false);
-  const [days, setDays] = useState(30); // Для фільтрації по датах
+  const [days, setDays] = useState(30);
   const [darkMode, setDarkMode] = useState(localStorage.getItem('theme') === 'dark');
 
-  // Стан для авторизації
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState("");
 
-  // Стан для налаштувань
   const [monoToken, setMonoToken] = useState("");
   const [monoAccId, setMonoAccId] = useState("");
+  const [accounts, setAccounts] = useState([]); // Стан для списку карток
 
   const getAuthHeader = () => ({ headers: { Authorization: `Bearer ${token}` } });
 
-  // Завантаження даних (з урахуванням днів та бюджетів)
   const loadData = async () => {
     if (!token) return;
     try {
       const [resTx, resStats, resBudgets] = await Promise.all([
-        axios.get(`${API_URL}/transactions?days=${days}`, getAuthHeader()),
-        axios.get(`${API_URL}/stats`, getAuthHeader()),
-        axios.get(`${API_URL}/budgets`, getAuthHeader())
+         axios.get(`${API_URL}/transactions?days=${days}`, getAuthHeader()),
+         axios.get(`${API_URL}/stats?days=${days}`, getAuthHeader()),
+         axios.get(`${API_URL}/budgets`, getAuthHeader())
       ]);
       setTransactions(resTx.data);
       setStats(resStats.data);
       setBudgets(resBudgets.data);
     } catch (e) {
       if (e.response?.status === 401) handleLogout();
+    }
+  };
+
+  // Функція для завантаження списку карток з банку
+  const fetchAccounts = async () => {
+    if (!monoToken) {
+      alert("Спочатку введіть токен Monobank");
+      return;
+    }
+    try {
+      const res = await axios.get(`${API_URL}/monobank/accounts?token=${monoToken}`, getAuthHeader());
+      setAccounts(res.data);
+      if (res.data.length > 0) {
+        setMonoAccId(res.data[0].id); // Вибираємо першу картку автоматично
+      }
+    } catch (e) {
+      alert("Не вдалося завантажити картки. Перевірте токен.");
     }
   };
 
@@ -93,18 +113,34 @@ function App() {
     }
   };
 
+  const deleteBudget = async (id) => {
+    if (window.confirm("Видалити цей ліміт?")) {
+      await axios.delete(`${API_URL}/budgets/${id}`, getAuthHeader());
+      loadData();
+    }
+  };
+
+  const updateBudget = async (id, currentAmount) => {
+    const newAmt = prompt("Вкажіть нову суму ліміту:", currentAmount);
+    if (newAmt && !isNaN(newAmt)) {
+      await axios.put(`${API_URL}/budgets/${id}`, { limit_amount: parseFloat(newAmt) }, getAuthHeader());
+      loadData();
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     setToken(null);
     setTransactions([]);
   };
 
-  const filteredTransactions = transactions.filter(tx =>
-      tx.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tx.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredTransactions = transactions
+    .filter(tx =>
+        tx.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        tx.category.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    .sort((a, b) => new Date(b.time) - new Date(a.time));
 
-  // --- ЕКРАН АВТОРИЗАЦІЇ (З ТВОЇМ ГРАДІЄНТОМ) ---
   if (!token) {
     return (
         <div className="flex items-center justify-center min-h-screen bg-gradient-to-tr from-slate-900 to-blue-900 p-4">
@@ -125,7 +161,6 @@ function App() {
     );
   }
 
-  // --- ОСНОВНИЙ ЕКРАН (ТВІЙ ВІЗУАЛ + НОВІ ФУНКЦІЇ) ---
   return (
       <div className={`${darkMode ? 'bg-slate-900 text-white' : 'bg-gray-50 text-gray-900'} min-h-screen p-4 md:p-8 transition-colors duration-500`}>
         <div className="max-w-6xl mx-auto">
@@ -145,31 +180,79 @@ function App() {
             </div>
           </header>
 
-          {/* SETTINGS PANEL */}
+          {/* SETTINGS PANEL - СТИЛЬНИЙ ДИЗАЙН */}
           {showSettings && (
-              <div className={`mb-8 p-8 rounded-3xl shadow-xl animate-in fade-in duration-300 ${darkMode ? 'bg-blue-900' : 'bg-blue-600'} text-white`}>
-                <h2 className="text-xl font-bold mb-4">Налаштування API Monobank</h2>
-                <form onSubmit={async (e) => {
-                  e.preventDefault();
-                  await axios.post(`${API_URL}/settings`, { mono_token: monoToken, mono_account_id: monoAccId }, getAuthHeader());
-                  setShowSettings(false);
-                  loadData();
-                }} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <input type="password" placeholder="Мій X-Token" className="p-3 rounded-xl text-gray-800" onChange={e => setMonoToken(e.target.value)} required />
-                  <input type="text" placeholder="Мій Account ID" className="p-3 rounded-xl text-gray-800" onChange={e => setMonoAccId(e.target.value)} required />
-                  <button className="bg-white text-blue-600 font-bold p-3 rounded-xl hover:bg-blue-50 transition">Зберегти</button>
-                </form>
+              <div className={`mb-8 p-6 rounded-3xl shadow-2xl border animate-in slide-in-from-top duration-500 ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-blue-600 border-blue-500'} text-white`}>
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-white/10 rounded-lg">⚙️</div>
+                  <h2 className="text-xl font-bold">Налаштування Monobank</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  {/* Блок Токена */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-60 ml-1">Персональний API Токен</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        placeholder="Введіть X-Token..."
+                        className={`flex-1 p-3 rounded-2xl outline-none transition-all ${darkMode ? 'bg-slate-700 focus:bg-slate-600' : 'bg-white/20 focus:bg-white/30'} text-white placeholder:text-white/40`}
+                        value={monoToken}
+                        onChange={e => setMonoToken(e.target.value)}
+                      />
+                      <button
+                        onClick={fetchAccounts}
+                        className="bg-blue-500 hover:bg-blue-400 text-white px-5 rounded-2xl font-bold transition shadow-lg active:scale-95"
+                      >
+                        Знайти
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Блок Вибору Картки */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-60 ml-1">Оберіть рахунок</label>
+                    <select
+                      className={`p-3 rounded-2xl outline-none cursor-pointer transition-all ${darkMode ? 'bg-slate-700 focus:bg-slate-600' : 'bg-white/20 focus:bg-white/30'} text-white`}
+                      value={monoAccId}
+                      onChange={e => setMonoAccId(e.target.value)}
+                      disabled={accounts.length === 0}
+                    >
+                      {accounts.length === 0 ? (
+                        <option className="text-slate-900">Спочатку натисніть "Знайти"</option>
+                      ) : (
+                        accounts.map(acc => (
+                          <option key={acc.id} value={acc.id} className="text-slate-900">
+                            {acc.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                <button
+                  onClick={async () => {
+                    await axios.post(`${API_URL}/settings`, { mono_token: monoToken, mono_account_id: monoAccId }, getAuthHeader());
+                    setShowSettings(false);
+                    loadData();
+                  }}
+                  className={`w-full p-4 rounded-2xl font-black uppercase tracking-widest transition-all ${!monoAccId ? 'bg-gray-500/50 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 shadow-xl active:scale-[0.98]'}`}
+                  disabled={!monoAccId}
+                >
+                  Зберегти конфігурацію
+                </button>
               </div>
           )}
 
           {/* DATE FILTER BUTTONS */}
           <div className="flex gap-2 mb-8 overflow-x-auto pb-2">
-            {[7, 30, 90, 365].map(d => (
+            {[7, 30].map(d => (
                 <button
                     key={d} onClick={() => setDays(d)}
                     className={`px-6 py-2 rounded-full font-bold transition whitespace-nowrap ${days === d ? 'bg-blue-600 text-white shadow-lg' : (darkMode ? 'bg-slate-800 text-gray-400' : 'bg-white text-gray-500 shadow-sm')}`}
                 >
-                  {d === 365 ? 'Рік' : `${d} днів`}
+                  {`${d} днів`}
                 </button>
             ))}
           </div>
@@ -204,10 +287,18 @@ function App() {
                   const spent = stats.categories.find(c => c.name === b.category)?.value || 0;
                   const percent = Math.min((spent / b.limit_amount) * 100, 100);
                   return (
-                      <div key={b.id}>
-                        <div className="flex justify-between text-[10px] font-black uppercase mb-1">
-                          <span>{b.category}</span>
-                          <span className={percent > 90 ? 'text-rose-500' : ''}>{spent.toFixed(0)} / {b.limit_amount} ₴</span>
+                      <div key={b.id} className="group">
+                        <div className="flex justify-between items-center text-[10px] font-black uppercase mb-1">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => deleteBudget(b.id)} className="text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                            <span>{b.category}</span>
+                          </div>
+                          <span
+                            onClick={() => updateBudget(b.id, b.limit_amount)}
+                            className={`cursor-pointer hover:text-blue-500 transition-colors ${percent > 90 ? 'text-rose-500' : ''}`}
+                          >
+                            {spent.toFixed(0)} / {b.limit_amount} ₴
+                          </span>
                         </div>
                         <div className={`h-1.5 w-full rounded-full overflow-hidden ${darkMode ? 'bg-slate-700' : 'bg-gray-100'}`}>
                           <div className={`h-full transition-all duration-1000 ${percent > 90 ? 'bg-rose-500' : 'bg-blue-500'}`} style={{ width: `${percent}%` }}></div>
@@ -228,14 +319,12 @@ function App() {
                         outerRadius={70}
                         paddingAngle={5}
                         dataKey="value"
-                        nameKey="name" // Вказуємо, що назва категорії в полі "name"
+                        nameKey="name"
                     >
                       {stats.categories.map((entry, i) => (
                           <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />
                       ))}
                     </Pie>
-
-                    {/* Налаштування підказки при наведенні */}
                     <Tooltip
                         contentStyle={{
                           backgroundColor: darkMode ? '#1e293b' : '#fff',
@@ -244,16 +333,14 @@ function App() {
                           color: darkMode ? '#fff' : '#000'
                         }}
                     />
-
-                    {/* Легенда: відображає кольори та назви категорій */}
                     <Legend
                         verticalAlign="bottom"
                         align="center"
                         iconType="circle"
                         formatter={(value) => (
                             <span className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} text-xs font-medium`}>
-            {value}
-          </span>
+                              {value}
+                            </span>
                         )}
                     />
                   </PieChart>
@@ -276,7 +363,7 @@ function App() {
                   {loading ? "..." : "Оновити"}
                 </button>
               </div>
-              <div className="max-h-[500px] overflow-y-auto">
+              <div className="max-h-[500px] overflow-y-auto text-center">
                 <table className="w-full text-left">
                   <thead className={`text-[10px] font-black uppercase tracking-widest sticky top-0 backdrop-blur-md ${darkMode ? 'bg-slate-800/80 text-gray-500' : 'bg-gray-50/80 text-gray-400'}`}>
                   <tr>
@@ -288,17 +375,26 @@ function App() {
                   </thead>
                   <tbody className="text-sm">
                   {filteredTransactions.map(tx => (
-                      <tr key={tx.id} className={`border-b border-opacity-5 border-gray-500 hover:bg-opacity-5 hover:bg-gray-500 transition`}>
+                      <tr key={tx.id}
+                          className={`border-b border-opacity-5 border-gray-500 hover:bg-opacity-5 hover:bg-gray-500 transition`}>
                         <td className="p-5 opacity-50">{new Date(tx.time).toLocaleDateString()}</td>
-                        <td className="p-5 font-bold cursor-pointer hover:text-blue-500 transition-colors" onClick={() => editCategory(tx.id, tx.category)}>{tx.description}</td>
-                        <td className="p-5 uppercase text-[9px] font-black tracking-tighter">
-                          <span className="px-2 py-1 bg-blue-500 bg-opacity-10 text-blue-500 rounded-lg">{tx.category}</span>
+                        <td className="p-5 font-bold cursor-pointer hover:text-blue-500 transition-colors"
+                            onClick={() => editCategory(tx.id, tx.category)}>{tx.description}</td>
+                        <td className="p-5 uppercase text-[10px] font-black tracking-tight">
+                            <span className="px-2 py-1 bg-blue-600 text-white rounded-lg shadow-sm">
+                              {tx.category || "БЕЗ КАТЕГОРІЇ"}
+                            </span>
                         </td>
                         <td className={`p-5 text-right font-black ${tx.amount < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
                           {tx.amount > 0 ? `+${tx.amount.toFixed(2)}` : tx.amount.toFixed(2)} ₴
                         </td>
                       </tr>
                   ))}
+                  {filteredTransactions.length === 0 && (
+                    <tr>
+                      <td colSpan="4" className="p-10 text-center text-gray-500 italic font-medium">За вашим запитом нічого не знайдено</td>
+                    </tr>
+                  )}
                   </tbody>
                 </table>
               </div>
