@@ -170,10 +170,45 @@ function App() {
                 <h2 className="text-xl font-bold mb-6">Налаштування Monobank</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                   <div className="flex flex-col gap-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-60 ml-1">Персональний API Токен</label>
+                    <div className="flex items-center gap-2 ml-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-60">
+                        Персональний API Токен
+                      </label>
+
+                      <div className="group relative flex items-center">
+                        <div className="cursor-help bg-white/20 hover:bg-white/40 w-4 h-4 rounded-full flex items-center justify-center text-[10px] border border-white/30 transition-colors">
+                          ?
+                        </div>
+
+
+                        <div className="absolute bottom-[80%] left-0 pb-3 hidden group-hover:block w-64 z-50">
+                          <div className="p-3 bg-slate-800 text-white text-[11px] rounded-xl shadow-2xl border border-slate-600 normal-case tracking-normal">
+                            <p className="font-bold mb-2 text-blue-400">Як отримати токен?</p>
+                            <ol className="list-decimal list-inside space-y-1.5 opacity-90">
+                              <li>Перейдіть на <a href="https://api.monobank.ua" target="_blank" rel="noreferrer" className="underline decoration-blue-500 text-blue-300 hover:text-blue-200">api.monobank.ua</a></li>
+                              <li>Відскануйте QR-код у додатку</li>
+                              <li>Скопіюйте <b>X-Token</b> та вставте сюди</li>
+                            </ol>
+                            <div className="absolute top-[calc(100%-12px)] left-2 border-4 border-transparent border-t-slate-800"></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex gap-2">
-                      <input type="password" placeholder="Введіть X-Token..." className={`flex-1 p-3 rounded-2xl outline-none text-white ${darkMode ? 'bg-slate-700' : 'bg-white/20'}`} value={monoToken} onChange={e => setMonoToken(e.target.value)} />
-                      <button onClick={fetchAccounts} className="bg-blue-500 text-white px-5 rounded-2xl font-bold">Знайти</button>
+                      <input
+                          type="password"
+                          placeholder="Введіть X-Token..."
+                          className={`flex-1 p-3 rounded-2xl outline-none text-white ${darkMode ? 'bg-slate-700' : 'bg-white/20'}`}
+                          value={monoToken}
+                          onChange={e => setMonoToken(e.target.value)}
+                      />
+                      <button
+                          onClick={fetchAccounts}
+                          className="bg-blue-500 hover:bg-blue-600 transition-colors text-white px-5 rounded-2xl font-bold"
+                      >
+                        Знайти
+                      </button>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
