@@ -16,6 +16,8 @@ class User(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(String, index=True)
+    external_id = Column(String, unique=True, index=True)
     mono_id = Column(String, unique=True, index=True)
     amount = Column(Float)
     description = Column(String)

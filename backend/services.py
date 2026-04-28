@@ -1,4 +1,5 @@
 import requests
+import time
 
 MCC_CATEGORIES = {
     5411: "Продукти", 5499: "Продукти", 5441: "Продукти", 5422: "Продукти",
@@ -27,10 +28,18 @@ MCC_CATEGORIES = {
 def get_category_name(mcc: int):
     return MCC_CATEGORIES.get(mcc, "Інше")
 
-def fetch_mono_data(token: str, account_id: str, start_time: int):
-    url = f"https://api.monobank.ua/personal/statement/{account_id}/{start_time}"
+
+def fetch_monobank_data(token, account_id):
+    to_time = int(time.time())
+    from_time = to_time - (30 * 24 * 60 * 60)
+
+    url = f"https://api.monobank.ua/personal/statement/{account_id}/{from_time}/{to_time}"
     headers = {"X-Token": token}
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return []
+
+    res = requests.get(url, headers=headers)
+
+    if res.status_code != 200:
+        print(f"Помилка банку: {res.status_code} - {res.text}")
+        return []
+
+    return res.json()

@@ -106,6 +106,7 @@ def get_transactions(days: int = 30, db: Session = Depends(database.get_db), cur
     start_date = datetime.now() - timedelta(days=days)
     return db.query(models.Transaction).filter(
         models.Transaction.user_id == current_user.id,
+        models.Transaction.account_id == current_user.mono_account_id,
         models.Transaction.time >= start_date
     ).order_by(models.Transaction.time.desc()).all()
 
@@ -123,12 +124,14 @@ def get_stats(days: int = 30, db: Session = Depends(database.get_db), current_us
 
     expenses = db.query(models.Transaction.category, func.abs(func.sum(models.Transaction.amount))).filter(
         models.Transaction.user_id == current_user.id,
+        models.Transaction.account_id == current_user.mono_account_id,
         models.Transaction.amount < 0,
         models.Transaction.time >= start_date
     ).group_by(models.Transaction.category).all()
 
     income = db.query(func.sum(models.Transaction.amount)).filter(
         models.Transaction.user_id == current_user.id,
+        models.Transaction.account_id == current_user.mono_account_id,
         models.Transaction.amount > 0,
         models.Transaction.time >= start_date
     ).scalar() or 0
@@ -159,17 +162,34 @@ def update_settings(data: SettingsUpdate, db: Session = Depends(database.get_db)
     db.commit()
     return {"message": "Збережено"}
 
+
 @app.post("/sync")
-def sync_transactions(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
-    if not current_user.mono_token: raise HTTPException(status_code=400, detail="Налаштуйте токен")
-    start_time = int(time.time()) - (30 * 24 * 60 * 60)
-    data = services.fetch_mono_data(current_user.mono_token, current_user.mono_account_id, start_time)
+def sync_data(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+    print(f"Починаю синхронізацію для: {current_user.username}")
+
+    if not current_user.mono_token or not current_user.mono_account_id:
+        print("Помилка: Токен або ID картки не встановлені")
+        raise HTTPException(status_code=400, detail="Налаштування не знайдені")
+
+    data = services.fetch_monobank_data(current_user.mono_token, current_user.mono_account_id)
+
+    print(f"Банк повернув: {len(data)} записів")
+
     for item in data:
-        if not db.query(models.Transaction).filter(models.Transaction.mono_id == item['id']).first():
-            db.add(models.Transaction(
-                mono_id=item['id'], amount=item['amount']/100, description=item['description'],
-                mcc=item['mcc'], category=services.get_category_name(item['mcc']),
-                time=datetime.fromtimestamp(item['time']), user_id=current_user.id
-            ))
+        existing = db.query(models.Transaction).filter(models.Transaction.external_id == str(item['id'])).first()
+        if not existing:
+            new_tx = models.Transaction(
+                user_id=current_user.id,
+                account_id=current_user.mono_account_id,
+                external_id=str(item['id']),
+                description=item['description'],
+                mcc=item['mcc'],
+                amount=item['amount'] / 100.0,
+                time=datetime.fromtimestamp(item['time']),
+                category=services.MCC_CATEGORIES.get(item['mcc'], "Інше")
+            )
+            db.add(new_tx)
+
     db.commit()
-    return {"status": "ok"}
+    print("Синхронізація завершена успішно")
+    return {"status": "ok", "count": len(data)}
